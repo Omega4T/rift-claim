@@ -39,7 +39,7 @@ function addPlayer(room, name, isBot) {
   const clean = String(name || '').trim().slice(0, 24);
   if (!clean) throw new Error('name required');
   if (room.players.some(p => p.name.toLowerCase() === clean.toLowerCase())) throw new Error('name taken');
-  const p = { name: clean, isBot: !!isBot, score: 0, stolen: 0, move: null, ready: false };
+  const p = { name: clean, isBot: !!isBot, score: 0, stolen: 0, tiles: 0, move: null, ready: false };
   room.players.push(p);
   return p;
 }
@@ -112,9 +112,9 @@ function resolve(room) {
   for (const [tile, claimants] of claims) {
     const t = room.board[tile];
     if (blocks.has(tile)) { events.push({ t: 'blocked', tile, by: moves.filter(x => x.m.type === 'block' && x.m.tile === tile).map(x => x.p.name), claimants: claimants.map(c => c.name) }); continue; }
-    if (claimants.length > 1) { events.push({ t: 'contested', tile, players: claimants.map(c => c.name) }); continue; }
+    if (claimants.length > 1) { t.takenBy = 'contested'; events.push({ t: 'contested', tile, players: claimants.map(c => c.name) }); continue; }
     t.takenBy = claimants[0].name;
-    claimants[0].score += t.value;
+    claimants[0].score += t.value; claimants[0].tiles += 1;
     events.push({ t: 'claim', tile, value: t.value, by: claimants[0].name });
   }
   // 2. raids resolve after claims, against the current leader
@@ -132,8 +132,9 @@ function resolve(room) {
 
   if (room.round >= ROUNDS || openTiles(room).length === 0) {
     room.phase = 'done';
-    const best = room.players.slice().sort((a, b) => b.score - a.score);
-    room.winner = best[0].score === best[1]?.score ? null : best[0].name;
+    const best = room.players.slice().sort((a, b) => b.score - a.score || b.tiles - a.tiles);
+    const tiedScore = best[0].score === best[1]?.score;
+    room.winner = tiedScore && best[0].tiles === best[1]?.tiles ? null : best[0].name;
     room.log.push({ t: 'end', winner: room.winner, scores: best.map(p => ({ name: p.name, score: p.score })) });
   } else {
     room.round += 1;
@@ -146,7 +147,7 @@ const publicState = (room, name) => ({
   round: room.round,
   rounds: ROUNDS,
   board: room.board,
-  players: room.players.map(p => ({ name: p.name, isBot: p.isBot, score: p.score, moved: !!p.move })),
+  players: room.players.map(p => ({ name: p.name, isBot: p.isBot, score: p.score, tiles: p.tiles, moved: !!p.move })),
   yourTurn: room.phase === 'play' && !!name && room.players.some(p => p.name === name && !p.move),
   winner: room.winner || null,
   rules: { tiles: TILES, raidSteal: RAID_STEAL, maxPlayers: MAX_PLAYERS },
