@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rift Claim — a 4-minute strategy duel</title>
+<style>
+  :root{--bg:#0b0d12;--panel:#141821;--line:#232a37;--text:#e8edf6;--dim:#8b96a8;--gold:#e0b558;--red:#e2574c;--blue:#5c9dff;--green:#4ec9a0}
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1000px 600px at 50% -10%,#1a2130 0%,var(--bg) 60%);color:var(--text);font:15px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh}
+  .wrap{max-width:960px;margin:0 auto;padding:28px 18px 60px}
+  h1{font-size:26px;margin:0 0 4px;letter-spacing:-.02em}
+  .sub{color:var(--dim);margin:0 0 22px;font-size:13.5px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  input{background:#0e121a;border:1px solid var(--line);color:var(--text);border-radius:9px;padding:10px 12px;font-size:14px;min-width:150px}
+  input:focus{outline:none;border-color:#3b4a63}
+  button{background:#1c2331;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:10px 14px;font-size:14px;cursor:pointer;transition:.15s}
+  button:hover:not(:disabled){border-color:#3b4a63;background:#222b3c}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:var(--gold);color:#20180a;border-color:var(--gold);font-weight:600}
+  button.claim{background:#1b3a2c;border-color:#2a5a44}
+  button.block{background:#3a1f1f;border-color:#5a2c2c}
+  button.raid{background:#2c2340;border-color:#43325f}
+  .board{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0 6px}
+  .tile{position:relative;background:#0f141d;border:1px solid var(--line);border-radius:12px;padding:14px 8px;text-align:center;cursor:pointer;transition:.15s;min-height:82px}
+  .tile:hover:not(.taken){border-color:#3b4a63;transform:translateY(-1px)}
+  .tile .v{font-size:24px;font-weight:700;color:var(--gold)}
+  .tile .who{font-size:11px;color:var(--dim);margin-top:4px;min-height:14px}
+  .tile.taken{opacity:.42;cursor:default}
+  .tile.sel{border-color:var(--gold);box-shadow:0 0 0 2px rgba(224,181,88,.18)}
+  .score{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 0}
+  .pill{background:#0f141d;border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px}
+  .pill.you{border-color:var(--gold);color:var(--gold)}
+  .pill.lead{border-color:var(--green)}
+  .log{font-size:13px;color:var(--dim);max-height:220px;overflow:auto;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--dim);margin-left:8px}
+  .hide{display:none}
+  .hint{color:var(--dim);font-size:12.5px;margin-top:8px}
+  a{color:var(--blue)}
+  .code{font-family:ui-monospace,Menlo,monospace;color:var(--gold);letter-spacing:.14em;font-size:17px}
+  .banner{background:#1b2433;border:1px solid #2c3a52;border-radius:10px;padding:10px 14px;font-size:13.5px;margin-bottom:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Rift Claim</h1>
+  <p class="sub">Eight tiles. Ten seconds per turn. Claim, block, or raid — everyone picks at the same time.</p>
+
+  <div id="lobby" class="card">
+    <div class="row">
+      <input id="name" placeholder="your name" maxlength="24">
+      <button class="primary" id="create">Create match</button>
+      <input id="code" placeholder="code e.g. A1B2C3" maxlength="8">
+      <button id="join">Join</button>
+      <button id="solo">Play vs bot</button>
+    </div>
+    <p class="hint">Share the match link and friends join straight into the lobby. Empty seats are filled by bots when you start.</p>
+  </div>
+
+  <div id="game" class="card hide">
+    <div class="row" style="justify-content:space-between">
+      <div>Match <span class="code" id="codeView"></span><span class="badge" id="phase"></span></div>
+      <div>
+        <button id="copy">Copy invite link</button>
+        <button class="primary" id="start">Start</button>
+      </div>
+    </div>
+    <div class="score" id="scores"></div>
+    <div class="board" id="board"></div>
+    <div class="banner hide" id="banner"></div>
+    <div class="row" id="actions">
+      <span id="selLabel" class="hint">Pick a tile, then choose CLAIM or BLOCK</span>
+      <button class="claim" id="claim" disabled>Claim +value</button>
+      <button class="block" id="block" disabled>Block tile</button>
+      <button class="raid" id="raid">Raid leader (+2)</button>
+    </div>
+    <p class="hint">Blocks resolve first · two claims on one tile cancel · raids hit the leader after claims.</p>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let me = null, code = null, sel = null, timer = null;
+
+async function api(path, body) {
+  const r = await fetch('/api/' + path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : undefined);
+  return r.json();
+}
+
+function invite() { return location.origin + '/?code=' + code; }
+
+$('#create').onclick = async () => {
+  const name = $('#name').value.trim() || 'host';
+  const r = await api('new', { name });
+  if (!r.ok) return alert(r.error);
+  me = name; code = r.code; enter();
+};
+$('#join').onclick = async () => {
+  const name = $('#name').value.trim() || 'guest';
+  const c = ($('#code').value.trim() || new URLSearchParams(location.search).get('code') || '').toUpperCase();
+  const r = await api('join', { code: c, name });
+  if (!r.ok) return alert(r.error);
+  me = name; code = r.code; enter();
+};
+$('#solo').onclick = async () => {
+  const name = $('#name').value.trim() || 'you';
+  const r = await api('new', { name });
+  if (!r.ok) return alert(r.error);
+  me = name; code = r.code; enter();
+  await api('start', { code, name: me });
+};
+$('#start').onclick = async () => { const r = await api('start', { code, name: me }); if (!r.ok) return alert(r.error); render(r.state); };
+$('#copy').onclick = async () => { await navigator.clipboard.writeText(invite()); $('#copy').textContent = 'Copied'; setTimeout(() => $('#copy').textContent = 'Copy invite link', 1200); };
+
+function enter() {
+  $('#lobby').classList.add('hide');
+  $('#game').classList.remove('hide');
+  $('#codeView').textContent = code;
+  history.replaceState({}, '', '/?code=' + code);
+  tick(); clearInterval(timer); timer = setInterval(tick, 1200);
+}
+
+async function tick() {
+  const r = await api('state?code=' + code + '&player=' + encodeURIComponent(me));
+  if (r.ok) render(r.state);
+}
+
+function render(s) {
+  $('#phase').textContent = s.phase === 'lobby' ? 'lobby' : s.phase === 'play' ? 'round ' + s.round + '/' + s.rounds : 'finished';
+  $('#start').classList.toggle('hide', s.phase !== 'lobby');
+  const lead = s.players.reduce((a, b) => (b.score > (a?.score ?? -1) ? b : a), null);
+  $('#scores').innerHTML = s.players.map(p =>
+    `<span class="pill ${p.name === me ? 'you' : ''} ${lead && p.name === lead.name && s.phase !== 'lobby' ? 'lead' : ''}">${esc(p.name)}${p.isBot ? ' ·bot' : ''} — ${p.score}${p.moved && s.phase === 'play' ? ' ✓' : ''}</span>`
+  ).join('');
+
+  $('#board').innerHTML = s.board.map(t => {
+    const taken = t.takenBy !== null;
+    return `<div class="tile ${taken ? 'taken' : ''} ${sel === t.id ? 'sel' : ''}" data-tile="${t.id}">
+      <div class="v">${t.value}</div><div class="who">${taken ? esc(t.takenBy) : 'open'}</div></div>`;
+  }).join('');
+  document.querySelectorAll('.tile:not(.taken)').forEach(el => el.onclick = () => {
+    sel = Number(el.dataset.tile);
+    $('#selLabel').textContent = 'Tile ' + sel + ' selected';
+    $('#claim').disabled = $('#block').disabled = !s.yourTurn;
+    render(s);
+  });
+
+  const mine = s.players.find(p => p.name === me);
+  const canAct = s.yourTurn && mine && !mine.moved;
+  $('#claim').disabled = !canAct || sel === null;
+  $('#block').disabled = !canAct || sel === null;
+  $('#raid').disabled = !canAct;
+
+  const b = $('#banner');
+  if (s.phase === 'done') { b.classList.remove('hide'); b.textContent = s.winner ? `Winner: ${s.winner}` : 'Draw — nobody led.'; }
+  else if (canAct) { b.classList.remove('hide'); b.textContent = 'Your move — everyone resolves at the same time.'; }
+  else { b.classList.add('hide'); }
+
+  loadLog();
+}
+
+async function loadLog() {
+  const r = await api('log?code=' + code);
+  if (!r.ok) return;
+  const lines = [];
+  for (const e of r.log) {
+    if (e.t === 'start') lines.push(`— match started: ${e.players.join(', ')} —`);
+    else if (e.t === 'round') {
+      lines.push(`R${e.round}: ` + e.events.map(ev =>
+        ev.t === 'claim' ? `${ev.by} claims tile ${ev.tile} (+${ev.value})` :
+        ev.t === 'blocked' ? `tile ${ev.tile} blocked (${ev.claimants.join(',')} denied)` :
+        ev.t === 'contested' ? `tile ${ev.tile} contested by ${ev.players.join(' & ')} — void` :
+        ev.t === 'raid' ? `${ev.by} raids ${ev.target} (-${ev.amount})` : `${ev.by} raids thin air`
+      ).join(' · ') + '  → ' + e.scores.map(x => `${x.name} ${x.score}`).join(' / '));
+    } else if (e.t === 'end') lines.push(`— end: ${e.winner ? e.winner + ' wins' : 'draw'} —`);
+  }
+  const el = $('#log'); el.textContent = lines.join('\n'); el.scrollTop = el.scrollHeight;
+}
+
+const esc = s => String(s).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+
+async function move(action) {
+  const r = await api('move', { code, player: me, action });
+  if (!r.ok) return alert(r.error);
+  sel = null; $('#selLabel').textContent = 'Pick a tile, then choose CLAIM or BLOCK';
+  render(r.state);
+}
+$('#claim').onclick = () => sel !== null && move({ type: 'claim', tile: sel });
+$('#block').onclick = () => sel !== null && move({ type: 'block', tile: sel });
+$('#raid').onclick = () => move({ type: 'raid' });
+
+// auto-join from invite link
+const qc = new URLSearchParams(location.search).get('code');
+if (qc) { $('#code').value = qc; $('#name').focus(); }
+</script>
+</body>
+</html>
